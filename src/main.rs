@@ -6,8 +6,21 @@ use std::{collections::HashMap, io::prelude::*};
 #[macro_use]
 extern crate lazy_static;
 
-const MIN_W: usize = 10;
-const MIN_N: usize = 25;
+struct Config {
+    pub min_w: usize,
+    pub min_n: usize,
+    pub start_page: usize,
+    pub to_lower: bool,
+    pub base_prob: f64,
+}
+
+static CONFIG: Config = Config {
+    min_w: 10,
+    min_n: 100,
+    start_page: 0,
+    to_lower: false,
+    base_prob: 3e-5,
+};
 
 fn in_blacklist(author: &str) -> bool {
     lazy_static! {
@@ -36,6 +49,13 @@ fn lemmatize(data: String) -> String {
 
     let data = R1.replace_all(&(" ".to_string() + &data), " ").into_owned();
     let data = R2.replace_all(&data, " ").into_owned();
+
+    let data = if CONFIG.to_lower {
+        data.to_lowercase()
+    } else {
+        data
+    };
+
     data.trim().to_string()
 }
 
@@ -76,7 +96,7 @@ fn parse(docs_str: String) -> (Vec<(usize, String)>, HashMap<String, usize>, Vec
             Ok(Event::Text(e)) => {
                 if div_class[div_class.len() - 1] == "text" && !in_blacklist(&author) {
                     let data = lemmatize(e.unescape_and_decode(&reader).unwrap());
-                    if space_count(&data) >= MIN_W - 1 {
+                    if space_count(&data) >= CONFIG.min_w - 1 {
                         if authortemp.get(&author).is_none() {
                             authortemp.insert(author.clone(), Some(Vec::new()));
                         } else if authortemp[&author].is_none() {
@@ -88,7 +108,7 @@ fn parse(docs_str: String) -> (Vec<(usize, String)>, HashMap<String, usize>, Vec
                                 .as_mut()
                                 .unwrap()
                                 .push(data);
-                            if authortemp[&author].as_ref().unwrap().len() == MIN_N {
+                            if authortemp[&author].as_ref().unwrap().len() == CONFIG.min_n {
                                 authorlist.insert(author.clone(), authorlist.len() + 1);
                                 revlist.push(author.clone());
                                 for msg in authortemp.get_mut(&author).unwrap().take().unwrap() {
@@ -166,11 +186,10 @@ fn predict(chains: &Vec<HashMap<String, HashMap<String, f64>>>, doc: &str) -> Ve
         let mut prob = 1.0;
         let mut oc = String::new();
         for c in doc.chars() {
-            const BASE_PROB: f64 = 3e-5;
             prob *= chain
                 .get(&oc)
                 .and_then(|e| e.get(&c.to_string()).copied())
-                .unwrap_or(BASE_PROB);
+                .unwrap_or(CONFIG.base_prob);
 
             prob *= 1.0;
             oc = c.to_string();
@@ -256,14 +275,14 @@ fn main() {
     let mark = test(&markov, doc_test);
     eprintln!("Precizeco: {:.2}%", mark * 100.0);
 
-    let msg_str = &std::fs::read_to_string("msg.txt").unwrap_or(String::new());
+    let msg_str = std::fs::read_to_string("msg.txt").unwrap_or(String::new());
 
     if msg_str.trim().is_empty() {
         eprintln!("Eraro: dosiero \"msg.txt\" ne ekzistas aŭ malplenas");
         return;
     }
 
-    let authors = predict(&markov, &msg_str);
+    let authors = predict(&markov, &lemmatize(msg_str));
 
     for (p, a) in authors {
         println!("{:9.4} {}", p.ln(), authors_rev[a]);
