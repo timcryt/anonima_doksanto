@@ -1,0 +1,7 @@
+Config (
+    min_w: 10,
+    min_n: 100,
+    start_page: 0,
+    to_lower: true,
+    base_prob: 3e-5,
+)

@@ -1,3 +1,4 @@
+use once_cell::sync::OnceCell;
 use quick_xml::{events::Event, Reader};
 use rand::{seq::SliceRandom, thread_rng};
 use regex::Regex;
@@ -6,6 +7,10 @@ use std::{collections::HashMap, io::prelude::*};
 #[macro_use]
 extern crate lazy_static;
 
+#[macro_use]
+extern crate serde_derive;
+
+#[derive(Deserialize)]
 struct Config {
     pub min_w: usize,
     pub min_n: usize,
@@ -14,13 +19,15 @@ struct Config {
     pub base_prob: f64,
 }
 
-static CONFIG: Config = Config {
+/*static CONFIG: Config = Config {
     min_w: 10,
     min_n: 100,
     start_page: 0,
     to_lower: false,
     base_prob: 3e-5,
-};
+};*/
+
+static CONFIG: OnceCell<Config> = OnceCell::new();
 
 fn in_blacklist(author: &str) -> bool {
     lazy_static! {
@@ -50,7 +57,7 @@ fn lemmatize(data: String) -> String {
     let data = R1.replace_all(&(" ".to_string() + &data), " ").into_owned();
     let data = R2.replace_all(&data, " ").into_owned();
 
-    let data = if CONFIG.to_lower {
+    let data = if CONFIG.get().unwrap().to_lower {
         data.to_lowercase()
     } else {
         data
@@ -96,7 +103,7 @@ fn parse(docs_str: String) -> (Vec<(usize, String)>, HashMap<String, usize>, Vec
             Ok(Event::Text(e)) => {
                 if div_class[div_class.len() - 1] == "text" && !in_blacklist(&author) {
                     let data = lemmatize(e.unescape_and_decode(&reader).unwrap());
-                    if space_count(&data) >= CONFIG.min_w - 1 {
+                    if space_count(&data) >= CONFIG.get().unwrap().min_w - 1 {
                         if authortemp.get(&author).is_none() {
                             authortemp.insert(author.clone(), Some(Vec::new()));
                         } else if authortemp[&author].is_none() {
@@ -108,7 +115,9 @@ fn parse(docs_str: String) -> (Vec<(usize, String)>, HashMap<String, usize>, Vec
                                 .as_mut()
                                 .unwrap()
                                 .push(data);
-                            if authortemp[&author].as_ref().unwrap().len() == CONFIG.min_n {
+                            if authortemp[&author].as_ref().unwrap().len()
+                                == CONFIG.get().unwrap().min_n
+                            {
                                 authorlist.insert(author.clone(), authorlist.len() + 1);
                                 revlist.push(author.clone());
                                 for msg in authortemp.get_mut(&author).unwrap().take().unwrap() {
@@ -189,7 +198,7 @@ fn predict(chains: &Vec<HashMap<String, HashMap<String, f64>>>, doc: &str) -> Ve
             prob *= chain
                 .get(&oc)
                 .and_then(|e| e.get(&c.to_string()).copied())
-                .unwrap_or(CONFIG.base_prob);
+                .unwrap_or(CONFIG.get().unwrap().base_prob);
 
             prob *= 1.0;
             oc = c.to_string();
@@ -255,7 +264,21 @@ fn read_docs() -> Option<String> {
 }
 
 fn main() {
-    println!("Datumbazo alŝutitiĝas...");
+    println!("Konfiguracio alŝultitiĝas...");
+
+    CONFIG.set(
+        if let Some(s) = std::fs::read_to_string("conf.txt")
+            .ok()
+            .and_then(|s| ron::from_str(&s).ok())
+        {
+            s
+        } else {
+            eprintln!("Eraro: dosiero conf.txt ne ekzistas aŭ estas rompita");
+            return;
+        },
+    ).ok().unwrap();
+
+    eprintln!("Datumbazo alŝutitiĝas...");
 
     let docs_str = if let Some(s) = read_docs() {
         s
