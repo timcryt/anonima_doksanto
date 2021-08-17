@@ -16,6 +16,7 @@ struct Config {
     pub min_n: usize,
     pub start_page: usize,
     pub to_lower: bool,
+    pub mult: f64,
     pub base_prob: f64,
 }
 
@@ -192,7 +193,7 @@ fn predict(chains: &Vec<HashMap<String, HashMap<String, f64>>>, doc: &str) -> Ve
                 .and_then(|e| e.get(&c.to_string()).copied())
                 .unwrap_or(CONFIG.get().unwrap().base_prob);
 
-            prob *= 1.0;
+            prob *= CONFIG.get().unwrap().mult;
             oc = c.to_string();
         }
 

@@ -3,5 +3,6 @@ Config (
     min_n: 50,
     start_page: 100,
     to_lower: true,
+    mult: 1.0,
     base_prob: 1e-4,
 )
