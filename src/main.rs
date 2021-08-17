@@ -19,14 +19,6 @@ struct Config {
     pub base_prob: f64,
 }
 
-/*static CONFIG: Config = Config {
-    min_w: 10,
-    min_n: 100,
-    start_page: 0,
-    to_lower: false,
-    base_prob: 3e-5,
-};*/
-
 static CONFIG: OnceCell<Config> = OnceCell::new();
 
 fn in_blacklist(author: &str) -> bool {
@@ -243,7 +235,7 @@ fn read_docs() -> Option<String> {
 
     let mut buf = String::new();
 
-    for i in 70..=176 {
+    for i in (CONFIG.get().unwrap().start_page)..=176 {
         let s = format!(
             "messages{}.html",
             if i == 1 {
@@ -266,17 +258,20 @@ fn read_docs() -> Option<String> {
 fn main() {
     println!("Konfiguracio alŝultitiĝas...");
 
-    CONFIG.set(
-        if let Some(s) = std::fs::read_to_string("conf.txt")
-            .ok()
-            .and_then(|s| ron::from_str(&s).ok())
-        {
-            s
-        } else {
-            eprintln!("Eraro: dosiero conf.txt ne ekzistas aŭ estas rompita");
-            return;
-        },
-    ).ok().unwrap();
+    CONFIG
+        .set(
+            if let Some(s) = std::fs::read_to_string("conf.txt")
+                .ok()
+                .and_then(|s| ron::from_str(&s).ok())
+            {
+                s
+            } else {
+                eprintln!("Eraro: dosiero conf.txt ne ekzistas aŭ estas rompita");
+                return;
+            },
+        )
+        .ok()
+        .unwrap();
 
     eprintln!("Datumbazo alŝutitiĝas...");
 
