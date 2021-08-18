@@ -1,8 +1,11 @@
 Config (
     min_w: 10,
-    min_n: 50,
-    start_page: 100,
+    min_n: 100,
+    start_page: 1,
     to_lower: true,
-    mult: 1.0,
-    base_prob: 1e-4,
+    wordchain: false,
+    time_int: 30,
+    mult: 10.0,
+    len_divisor: 75.0,
+    base_prob: 1e-6,
 )

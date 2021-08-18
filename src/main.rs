@@ -16,7 +16,10 @@ struct Config {
     pub min_n: usize,
     pub start_page: usize,
     pub to_lower: bool,
+    pub wordchain: bool,
+    pub time_int: usize,
     pub mult: f64,
+    pub len_divisor: f64,
     pub base_prob: f64,
 }
 
@@ -44,11 +47,24 @@ fn in_blacklist(author: &str) -> bool {
 fn lemmatize(data: String) -> String {
     lazy_static! {
         static ref R1: Regex = Regex::new(r"\shttps?://\S+").unwrap();
-        static ref R2: Regex = Regex::new(r"\s+").unwrap();
+        static ref R21: Regex = Regex::new(r"\W").unwrap();
+        static ref R22: Regex = Regex::new(r"(o|a)j?n?\s").unwrap();
+        static ref R23: Regex = Regex::new(r"(i|a|o|u)s\s").unwrap();
+        static ref R24: Regex = Regex::new(r"\s(k|t|ĉ|nen)?iu(j)?(n)?\s").unwrap();
+        static ref R3: Regex = Regex::new(r"\s+").unwrap();
     }
 
     let data = R1.replace_all(&(" ".to_string() + &data), " ").into_owned();
-    let data = R2.replace_all(&data, " ").into_owned();
+    let data = if CONFIG.get().unwrap().wordchain {
+        let data = R21.replace_all(&data, r"$1 ").into_owned();
+        let data = R22.replace_all(&data, r"i ").into_owned();
+        let data = R23.replace_all(&data, r"$1u ").into_owned();
+        let data = R23.replace_all(&data, r"$1i ").into_owned();
+        data
+    } else {
+        data
+    };
+    let data = R3.replace_all(&data, " ").into_owned();
 
     let data = if CONFIG.get().unwrap().to_lower {
         data.to_lowercase()
@@ -63,7 +79,20 @@ fn space_count(data: &str) -> usize {
     data.chars().filter(|c| *c == ' ').count()
 }
 
-fn parse(docs_str: String) -> (Vec<(usize, String)>, HashMap<String, usize>, Vec<String>) {
+fn time_to_number(data: &str) -> usize {
+    let mut iter = data.split(':');
+    let (h, m) = (iter.next().unwrap(), iter.next().unwrap());
+    h.parse::<usize>().unwrap() * 60 + m.parse::<usize>().unwrap()
+}
+
+fn parse(
+    docs_str: String,
+) -> (
+    Vec<(usize, String, usize)>,
+    HashMap<String, usize>,
+    Vec<String>,
+    HashMap<String, [f64; 1440]>,
+) {
     let mut docs = Vec::new();
     let mut authorlist: HashMap<String, _> = HashMap::new();
     let mut revlist = vec![String::new()];
@@ -73,7 +102,9 @@ fn parse(docs_str: String) -> (Vec<(usize, String)>, HashMap<String, usize>, Vec
     reader.check_end_names(false);
     let mut div_class = vec![String::new()];
     let mut author = String::new();
+    let mut time = 0;
     let mut authortemp: HashMap<String, _> = HashMap::new();
+    let mut authortime: HashMap<String, _> = HashMap::new();
     let mut buf = Vec::new();
     loop {
         match reader.read_event(&mut buf) {
@@ -94,27 +125,31 @@ fn parse(docs_str: String) -> (Vec<(usize, String)>, HashMap<String, usize>, Vec
                 _ => (),
             },
             Ok(Event::Text(e)) => {
+                if div_class[div_class.len() - 1] == "pull_right date details" {
+                    time = time_to_number(e.unescape_and_decode(&reader).unwrap().trim());
+                }
                 if div_class[div_class.len() - 1] == "text" && !in_blacklist(&author) {
+                    authortime.entry(author.clone()).or_insert([0.0; 1440])[time] += 1.0;
                     let data = lemmatize(e.unescape_and_decode(&reader).unwrap());
                     if space_count(&data) >= CONFIG.get().unwrap().min_w - 1 {
                         if authortemp.get(&author).is_none() {
                             authortemp.insert(author.clone(), Some(Vec::new()));
                         } else if authortemp[&author].is_none() {
-                            docs.push((authorlist[&author], data));
+                            docs.push((authorlist[&author], data, time));
                         } else {
                             authortemp
                                 .get_mut(&author)
                                 .unwrap()
                                 .as_mut()
                                 .unwrap()
-                                .push(data);
+                                .push((data, time));
                             if authortemp[&author].as_ref().unwrap().len()
                                 == CONFIG.get().unwrap().min_n
                             {
                                 authorlist.insert(author.clone(), authorlist.len() + 1);
                                 revlist.push(author.clone());
                                 for msg in authortemp.get_mut(&author).unwrap().take().unwrap() {
-                                    docs.push((authorlist[&author], msg));
+                                    docs.push((authorlist[&author], msg.0, msg.1));
                                 }
                             }
                         }
@@ -124,13 +159,30 @@ fn parse(docs_str: String) -> (Vec<(usize, String)>, HashMap<String, usize>, Vec
                     author = data.trim().to_string();
                 }
             }
-            //Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
             Ok(Event::Eof) => break,
             _ => (),
         }
     }
     buf.clear();
-    (docs, authorlist, revlist)
+
+    for times in authortime.values_mut() {
+        let mut tvec = times.iter().copied().collect::<Vec<_>>();
+        let mut tv = tvec.clone();
+        tv.append(&mut tvec.clone());
+        tv.append(&mut tvec);
+        let ti = CONFIG.get().unwrap().time_int;
+        for i in 1440..2880 {
+            times[i - 1440] = tv[(i - ti)..=(i + ti)].iter().sum();
+        }
+
+        let s: f64 = times.iter().sum();
+
+        for i in 0..1440 {
+            times[i] /= s;
+        }
+    }
+
+    (docs, authorlist, revlist, authortime)
 }
 
 fn divide<T>(mut docs: Vec<T>, test_size: f64) -> (Vec<T>, Vec<T>) {
@@ -148,21 +200,28 @@ fn divide<T>(mut docs: Vec<T>, test_size: f64) -> (Vec<T>, Vec<T>) {
     (docs, test_suit)
 }
 
-fn learn_markov(docs: Vec<(usize, String)>) -> Vec<HashMap<String, HashMap<String, f64>>> {
+fn learn_markov(docs: Vec<(usize, String, usize)>) -> Vec<HashMap<String, HashMap<String, f64>>> {
     let n = docs.iter().map(|x| x.0).max().unwrap();
     let mut res = vec![HashMap::new(); n + 1];
 
-    for (author, doc) in docs {
+    for (author, doc, _) in docs {
         let chain = res.get_mut(author).unwrap();
         let mut oc = String::new();
-        for c in doc.chars() {
+        let iter = if CONFIG.get().unwrap().wordchain {
+            Box::new(doc.split_whitespace().map(|x| x.to_owned()))
+                as Box<dyn std::iter::Iterator<Item = String>>
+        } else {
+            Box::new(doc.chars().map(|x| x.to_string()))
+                as Box<dyn std::iter::Iterator<Item = String>>
+        };
+        iter.for_each(|c| {
             *chain
                 .entry(oc.clone())
                 .or_insert(HashMap::new())
                 .entry(c.to_string())
                 .or_insert(0.0) += 1.0;
             oc = c.to_string();
-        }
+        });
         *chain
             .entry(oc.clone())
             .or_insert(HashMap::new())
@@ -182,7 +241,13 @@ fn learn_markov(docs: Vec<(usize, String)>) -> Vec<HashMap<String, HashMap<Strin
     res
 }
 
-fn predict(chains: &Vec<HashMap<String, HashMap<String, f64>>>, doc: &str) -> Vec<(f64, usize)> {
+fn predict(
+    chains: &Vec<HashMap<String, HashMap<String, f64>>>,
+    authors_rev: &Vec<String>,
+    times: &HashMap<String, [f64; 1440]>,
+    doc: &str,
+    time: Option<usize>,
+) -> Vec<(f64, usize)> {
     let mut probs = Vec::new();
     for (i, chain) in chains.iter().enumerate().skip(1) {
         let mut prob = 1.0;
@@ -195,6 +260,11 @@ fn predict(chains: &Vec<HashMap<String, HashMap<String, f64>>>, doc: &str) -> Ve
 
             prob *= CONFIG.get().unwrap().mult;
             oc = c.to_string();
+        }
+
+        if let Some(t) = time {
+            prob *= times[&authors_rev[i]][t]
+                .powf(1.0 + doc.len() as f64 / CONFIG.get().unwrap().len_divisor);
         }
 
         probs.push((prob, i));
@@ -213,12 +283,14 @@ fn predict(chains: &Vec<HashMap<String, HashMap<String, f64>>>, doc: &str) -> Ve
 
 fn test(
     chains: &Vec<HashMap<String, HashMap<String, f64>>>,
-    test_suit: Vec<(usize, String)>,
+    authors_rev: &Vec<String>,
+    times: &HashMap<String, [f64; 1440]>,
+    test_suit: Vec<(usize, String, usize)>,
 ) -> f64 {
     test_suit
         .iter()
-        .filter_map(|(auth, doc)| {
-            if *auth == predict(chains, doc)[0].1 {
+        .filter_map(|(auth, doc, time)| {
+            if *auth == predict(chains, authors_rev, times, doc, Some(*time))[0].1 {
                 Some(())
             } else {
                 None
@@ -284,14 +356,15 @@ fn main() {
     };
 
     eprintln!("Datumbazo traktitiĝas...");
-    let (doc, _authors, authors_rev) = parse(docs_str);
+    let (doc, _authors, authors_rev, author_time) = parse(docs_str);
+
     let (doc_learn, doc_test) = divide(doc, 0.2);
 
     eprintln!("Markov-ĉeno kreitiĝas...");
     let markov = learn_markov(doc_learn);
 
     eprintln!("Markov-ĉeno ekzamenitiĝas..");
-    let mark = test(&markov, doc_test);
+    let mark = test(&markov, &authors_rev, &author_time, doc_test);
     eprintln!("Precizeco: {:.2}%", mark * 100.0);
 
     let msg_str = std::fs::read_to_string("msg.txt").unwrap_or(String::new());
@@ -301,7 +374,13 @@ fn main() {
         return;
     }
 
-    let authors = predict(&markov, &lemmatize(msg_str));
+    let authors = predict(
+        &markov,
+        &authors_rev,
+        &author_time,
+        &lemmatize(msg_str),
+        None,
+    );
 
     for (p, a) in authors {
         println!("{:9.4} {}", p.ln(), authors_rev[a]);
